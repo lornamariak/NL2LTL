@@ -1,36 +1,44 @@
+"""
+module to train a T5 model 
+"""
+
 import pandas as pd
 from transformers import T5Tokenizer, T5ForConditionalGeneration, AdamW
-from tqdm import tqdm
-import torch
 from torch.utils.data import Dataset, DataLoader
+import torch
+from tqdm import tqdm
 
-train_url = ""
-test_url = ""
+# Define constants for dataset URLs
+TRAIN_URL = ""
+TEST_URL = ""
 
-train_set = pd. read_csv(train_url)
-test_set = pd.read_csv(test_url)
+# Load datasets
+train_set = pd.read_csv(TRAIN_URL)
+test_set = pd.read_csv(TEST_URL)
 
-model_name = "t5-base"  # You can choose the appropriate T5 model
-tokenizer = T5Tokenizer.from_pretrained(model_name)
-
-model = T5ForConditionalGeneration.from_pretrained(model_name)
+# Initialize T5 tokenizer and model
+MODEL_NAME = "t5-base"  # You can choose the appropriate T5 model
+tokenizer = T5Tokenizer.from_pretrained(MODEL_NAME)
+model = T5ForConditionalGeneration.from_pretrained(MODEL_NAME)
 model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
 
 class CustomDataset(Dataset):
+    """
+    Custom Dataset class for handling tokenization and data preparation
+    for the T5 model.
+    """
+
     def __init__(self, dataframe, tokenizer, max_token_len=512):
         self.tokenizer = tokenizer
         self.data = dataframe
         self.max_token_len = max_token_len
 
-
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, index):
-
         row = self.data.iloc[index]
-        #combined_input = f"Given this natural language text {row['nl']} with context {row['context']}"
-        combined_input = f"Given this natural language text {row['nl']} "
+        combined_input = f"Given this natural language text {row['nl']}"
 
         encoding = self.tokenizer(
             combined_input,
@@ -47,11 +55,11 @@ class CustomDataset(Dataset):
             return_tensors="pt"
         )
 
-        return dict(
-            input_ids=encoding['input_ids'].flatten(),
-            attention_mask=encoding['attention_mask'].flatten(),
-            labels=target_encoding['input_ids'].flatten()
-        )
+        return {
+            'input_ids': encoding['input_ids'].flatten(),
+            'attention_mask': encoding['attention_mask'].flatten(),
+            'labels': target_encoding['input_ids'].flatten()
+        }
 
 train_dataset = CustomDataset(train_set, tokenizer)
 val_dataset = CustomDataset(test_set, tokenizer)
@@ -61,16 +69,17 @@ val_loader = DataLoader(val_dataset, batch_size=12)
 
 optimizer = AdamW(model.parameters(), lr=1e-5)
 
-#set Epochs
-nums_epoch = 50
+# Set number of epochs
+NUM_EPOCHS = 50
 
-def evaluate():
+def evaluate(model, val_loader, tokenizer):
+    """
+    Function to evaluate the model on the validation set.
+    """
     model.eval()
     total_eval_loss = 0
     total_matches = 0
     total_examples = 0
-
-    outs = []
 
     with torch.no_grad():
         for batch in val_loader:
@@ -87,7 +96,6 @@ def evaluate():
                 output_decoded = tokenizer.decode(output_id, skip_special_tokens=True)
                 label_decoded = tokenizer.decode(labels_list[i], skip_special_tokens=True)
                 
-                outs.append(f"{output_decoded}")
                 if output_decoded == label_decoded:
                     total_matches += 1
 
@@ -102,10 +110,10 @@ def evaluate():
 
 
 # Training loop
-for epoch in range(nums_epoch):
-    model.train() 
+for epoch in range(NUM_EPOCHS):
+    model.train()
     total_train_loss = 0
-    for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{nums_epoch}", unit="batch"):
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch + 1}/{NUM_EPOCHS}", unit="batch"):
         optimizer.zero_grad()
         input_ids = batch['input_ids'].to(model.device)
         attention_mask = batch['attention_mask'].to(model.device)
@@ -119,7 +127,5 @@ for epoch in range(nums_epoch):
         optimizer.step()
 
     avg_train_loss = total_train_loss / len(train_loader)
-    eval_loss, acc = evaluate()
-    print(f"Training Loss: {avg_train_loss} , Eval loss: {eval_loss}, Eval Acc: {acc}")
-
-
+    eval_loss, acc = evaluate(model, val_loader, tokenizer)
+    print(f"Training Loss: {avg_train_loss}, Eval loss: {eval_loss}, Eval Acc: {acc}")

@@ -1,73 +1,87 @@
+"""
+Module to generate context
+"""
+
 import json
 import pandas as pd
 import openai
 import random
 from sklearn.model_selection import train_test_split
 
-# read openai api
-with open("api_keys.json", "r") as config_file:
-    config = json.load(config_file)
-    api_key = config.get("api_key", "")
-openai.api_key = api_key
+def read_api_key(config_file_path):
+    """Reads and returns the OpenAI API key from a config file."""
+    with open(config_file_path, "r") as config_file:
+        config = json.load(config_file)
+        return config.get("api_key", "")
 
-# Replace 'your_file.jsonl' with the path to your JSON Lines file
-file_path = '../data/clean_up.jsonl'
+def load_data(file_path):
+    """Loads data from a JSONL file into a pandas DataFrame."""
+    data = []
+    with open(file_path, 'r') as file:
+        for line in file:
+            data.append(json.loads(line))
+    return pd.DataFrame(data)
 
-# Read the .jsonl file line by line and parse each line as JSON
-data = []
-with open(file_path, 'r') as file:
-    for line in file:
-        data.append(json.loads(line))
-df = pd.DataFrame(data)
+def create_formula_examples(dataframe, unique_formulas, sample_size):
+    """Creates a dictionary of formulas with example phrases."""
+    formula_data = {}
+    for formula in unique_formulas:
+        formula_df = dataframe[dataframe["formula"] == formula]
+        random.seed(42)
+        examples = random.sample(formula_df["natural"].tolist(), sample_size)
+        formula_data[formula] = ', '.join(examples)
+    return formula_data
 
+def get_contexts(data, model="gpt-4", max_tokens=512):
+    """Generates context descriptions using OpenAI's chat completions API."""
+    contexts = []
+    for formula, examples in data.items():
+        response = openai.ChatCompletion.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": ("You are a natural language to linear temporal language translator. "
+                                "You are tasked with guiding a robot to navigate four rooms with colours, "
+                                "red, blue, green, and yellow or any all colors synonymous to these. Given a "
+                                "linear temporal instruction and examples to go with it, generate a context describing "
+                                "that instruction in general terms.")
+                },
+                {
+                    "role": "user",
+                    "content": f"formula: '{formula}', examples: '{examples}'"
+                }
+            ],
+            temperature=1,
+            max_tokens=max_tokens,
+            top_p=1,
+            frequency_penalty=0.4,
+            presence_penalty=0
+        )
+        context = response.choices[0].message.content
+        contexts.append({'formula': formula, 'context': context})
+    return contexts
 
-# Split the DataFrame into training and testing sets
-train_df, test_df = train_test_split(df, test_size=0.3, random_state=42)
+def main():
+    """Main function to process data and generate contexts."""
+    api_key = read_api_key("api_keys.json")
+    openai.api_key = api_key
 
-unique_formulars = train_df["formula"].unique()
+    file_path = '../data/clean_up.jsonl'
+    df = load_data(file_path)
 
-formular_data = {}
+    train_df, _ = train_test_split(df, test_size=0.3, random_state=42)
+    unique_formulas = train_df["formula"].unique()
 
-for formula in unique_formulars:
-    tmp = train_df[train_df["formula"] == formula]
-    random.seed(42)  
-    selected_items = random.sample(tmp["natural"].tolist(), 5)
-    examples = ', '.join(selected_items)
+    formula_data = create_formula_examples(train_df, unique_formulas, 5)
+    assert formula_data, "Data processing failed"
 
-    formular_data[formula] = examples
+    with open('natural_formula_5.json', 'w') as json_file:
+        json.dump(formula_data, json_file, indent=4)
 
-assert formular_data and len(formular_data) == len(unique_formulars), print("Data processing failed")
+    contexts = get_contexts(formula_data)
+    context_df = pd.DataFrame(contexts)
+    context_df.to_csv("contexts_512.csv", index=False)
 
-with open('natural_formula_5.json', 'w') as json_file:
-    json.dump(formular_data, json_file, indent=4)
-
-
-file_path = 'natural_formula_5.json'
-with open(file_path, 'r') as file:
-    data = json.load(file)
-
-contexts = []
-for formula, examples in data.items():
-    response = openai.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a natural language to linear temporal language translator. You are tasked with guiding a robot to navigate four rooms with colours, red, blue, green and yellow or any all colors synonymous to these. Given a linear temporal instruction and examples to go with it, generate a context describing that instruction in general terms."
-            },
-            {
-                "role": "user",
-                "content": f"formula: '{formula}', examples: '{examples}'"
-            }
-        ],
-        temperature=1,
-        max_tokens=512, # cahnge to 256 when necessary
-        top_p=1,
-        frequency_penalty=0.4,
-        presence_penalty=0
-    )
-    context = response.choices[0].message.content 
-    contexts.append({'formula': formula, 'context': context})
-
-df = pd.DataFrame(contexts)
-df.to_csv("contexts_512.csv", index=False) #change file name when 256
+if __name__ == "__main__":
+    main()
